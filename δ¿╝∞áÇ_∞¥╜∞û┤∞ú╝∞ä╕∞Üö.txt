@@ -1,0 +1,11 @@
+[5-29 게시판 업데이트 안내]
+
+새로 만들지 말고 기존 Netlify 사이트에 덮어쓰는 업데이트입니다.
+기존 게시글/댓글/추천/배너는 Supabase에 보관되므로 삭제하지 않습니다.
+
+1) Supabase SQL Editor에서 supabase/upgrade_categories_cooldown.sql 전체 실행
+2) Netlify 기존 사이트 529-ing > Deploys 화면에서 이 폴더(529-clan-board) 전체를 드롭 영역에 업로드
+3) 새 배포가 Published가 되면 사이트 새로고침
+
+자세한 내용은 README.md를 참고하세요.
+기존 환경변수는 그대로 사용합니다.
