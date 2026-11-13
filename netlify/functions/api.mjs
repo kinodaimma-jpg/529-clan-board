@@ -31,6 +31,15 @@ const hashPw = async pw => { const salt=crypto.randomBytes(16).toString("hex"); 
 const checkPw = async (pw, stored) => { try{const [salt,h]=stored.split(":");const key=await new Promise((res,rej)=>crypto.scrypt(pw,salt,64,(e,k)=>e?rej(e):res(k)));const old=Buffer.from(h,"hex");return old.length===key.length&&crypto.timingSafeEqual(old,key)}catch{return false} };
 const one = async path => { const x=await db(path); return Array.isArray(x)?x[0]:x; };
 const postSelect = "id,author,title,body,category,views,created_at,comments(id,author,body,created_at),likes(id,voter_id)";
+const ACTIONS=["노래하는","춤추는","웃는","달리는","졸린","신나는","수줍은","장난치는","산책하는","먹보인","용감한","엉뚱한"];
+const COLORS=["빨간","주황","노란","초록","파란","남색","보라","분홍","민트","하늘색","검은","하얀"];
+const ANIMALS=["강아지","고양이","호랑이","토끼","곰","여우","판다","수달","쿼카","펭귄","햄스터","다람쥐"];
+const anonymousName = voter => {
+ const digest=crypto.createHash("sha256").update(String(voter||"anonymous")).digest();
+ return ACTIONS[digest[0]%ACTIONS.length]+" "+COLORS[digest[1]%COLORS.length]+" "+ANIMALS[digest[2]%ANIMALS.length];
+};
+const isPrivatePost = p => (p?.category||"free")==="report";
+
 const getPost = async id => {
  const p=await one(`/posts?select=${encodeURIComponent(postSelect)}&id=eq.${encodeURIComponent(id)}&limit=1`);
  if(!p)return null;
@@ -83,7 +92,7 @@ export const handler = async (event, runtimeEnv = process.env) => {
   if(path==="/posts"&&method==="GET"){
    const rows=await db(`/posts?select=${encodeURIComponent(postSelect)}&order=created_at.desc&limit=200`);
    const voter=(event.headers?.["x-voter-id"]||event.headers?.["X-Voter-Id"]||"");
-   return json(200,rows.map(p=>shapePost(p,voter)));
+   return json(200,rows.filter(p=>isAdmin||!isPrivatePost(p)).map(p=>shapePost(p,voter)));
   }
   if(path==="/posts"&&method==="POST"){
    const {title,body:content,password,author,category}=body;
@@ -95,33 +104,42 @@ export const handler = async (event, runtimeEnv = process.env) => {
    const password_hash=await hashPw(password);
    const slot=await db("/rpc/claim_post_slot",{method:"POST",body:JSON.stringify({p_voter_id:voter})});
    if(slot!==true)return json(429,{error:"게시글은 1분에 한 번만 작성할 수 있어요. 잠시 후 다시 시도해 주세요."});
-   const rows=await db("/posts",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({author:isAdmin?"관리자":`익명 사용자 ${crypto.randomBytes(2).toString("hex").toUpperCase()}`,title:title.trim().slice(0,80),body:content.trim().slice(0,3000),category,password_hash})});
+   const rows=await db("/posts",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({author:isAdmin?"관리자":anonymousName(voter),title:title.trim().slice(0,80),body:content.trim().slice(0,3000),category,password_hash})});
    return json(201,{id:rows[0].id});
   }
   const m=path.match(/^\/posts\/([0-9a-f-]+)(?:\/(comments|like|view))?$/i);
   if(m){
    const id=m[1],action=m[2];
    if(action==="comments"&&method==="POST"){
+    const target=await getPost(id);if(!target)return json(404,{error:"게시글을 찾을 수 없습니다."});
+    if(!isAdmin&&isPrivatePost(target))return json(403,{error:"비매너 게시판은 관리자만 이용할 수 있습니다."});
     if(!body.body?.trim())return json(400,{error:"댓글 내용을 입력해 주세요."});
-    await db("/comments",{method:"POST",body:JSON.stringify({post_id:id,author:isAdmin?"관리자":`익명 사용자 ${crypto.randomBytes(2).toString("hex").toUpperCase()}`,body:body.body.trim().slice(0,500)})});
+    const voter=(event.headers?.["x-voter-id"]||event.headers?.["X-Voter-Id"]||"");
+    if(!isAdmin&&!/^[0-9a-f-]{36}$/i.test(voter))return json(400,{error:"작성자 정보를 확인할 수 없습니다."});
+    await db("/comments",{method:"POST",body:JSON.stringify({post_id:id,author:isAdmin?"관리자":anonymousName(voter),body:body.body.trim().slice(0,500)})});
     return json(201,{ok:true});
    }
    if(action==="like"&&method==="POST"){
+    const target=await getPost(id);if(!target)return json(404,{error:"게시글을 찾을 수 없습니다."});
+    if(!isAdmin&&isPrivatePost(target))return json(403,{error:"비매너 게시판은 관리자만 이용할 수 있습니다."});
     if(!/^[0-9a-f-]{36}$/i.test(body.voter_id||""))return json(400,{error:"추천 정보를 확인할 수 없습니다."});
     const r=await fetch(base()+`/likes?on_conflict=post_id,voter_id`,{method:"POST",headers:{...headers(),"Prefer":"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify({post_id:id,voter_id:body.voter_id})});
     if(!r.ok)throw new Error("추천 처리에 실패했습니다.");
     return json(200,{ok:true});
    }
    if(action==="view"&&method==="POST"){
+    const target=await getPost(id);if(!target)return json(404,{error:"게시글을 찾을 수 없습니다."});
+    if(!isAdmin&&isPrivatePost(target))return json(403,{error:"비매너 게시판은 관리자만 이용할 수 있습니다."});
     await db("/rpc/increment_post_views",{method:"POST",body:JSON.stringify({post_uuid:id})});
     return json(200,{ok:true});
    }
    if(!action&&method==="GET"){
-    const p=await getPost(id);if(!p)return json(404,{error:"게시글을 찾을 수 없습니다."});const voter=(event.headers?.["x-voter-id"]||event.headers?.["X-Voter-Id"]||"");return json(200,shapePost(p,voter));
+    const p=await getPost(id);if(!p||(!isAdmin&&isPrivatePost(p)))return json(404,{error:"게시글을 찾을 수 없습니다."});const voter=(event.headers?.["x-voter-id"]||event.headers?.["X-Voter-Id"]||"");return json(200,shapePost(p,voter));
    }
    if(!action&&(method==="PATCH"||method==="DELETE")){
     const rows=await db(`/posts?select=id,password_hash&id=eq.${encodeURIComponent(id)}&limit=1`);
     if(!rows.length)return json(404,{error:"게시글을 찾을 수 없습니다."});
+    if(!isAdmin){const target=await one(`/posts?select=category&id=eq.${encodeURIComponent(id)}&limit=1`);if(isPrivatePost(target))return json(403,{error:"비매너 게시판은 관리자만 관리할 수 있습니다."});}
     if(!isAdmin&&!await checkPw(body.password||"",rows[0].password_hash))return json(403,{error:"게시글 비밀번호가 일치하지 않습니다."});
     if(method==="DELETE"){await db(`/posts?id=eq.${encodeURIComponent(id)}`,{method:"DELETE"});return json(200,{ok:true})}
     if(!body.title?.trim()||!body.body?.trim())return json(400,{error:"제목과 내용을 입력해 주세요."});
