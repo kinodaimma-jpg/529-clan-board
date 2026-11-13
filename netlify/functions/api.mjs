@@ -34,8 +34,14 @@ const postSelect = "id,author,title,body,category,views,created_at,comments(id,a
 const ACTIONS=["노래하는","춤추는","웃는","달리는","졸린","신나는","수줍은","장난치는","산책하는","먹보인","용감한","엉뚱한"];
 const COLORS=["빨간","주황","노란","초록","파란","남색","보라","분홍","민트","하늘색","검은","하얀"];
 const ANIMALS=["강아지","고양이","호랑이","토끼","곰","여우","판다","수달","쿼카","펭귄","햄스터","다람쥐"];
+const koreaDateKey = () => {
+ const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
+ const values=Object.fromEntries(parts.map(part=>[part.type,part.value]));
+ return values.year+"-"+values.month+"-"+values.day;
+};
 const anonymousName = voter => {
- const digest=crypto.createHash("sha256").update(String(voter||"anonymous")).digest();
+ const dailyKey=String(voter||"anonymous")+"|"+koreaDateKey();
+ const digest=crypto.createHash("sha256").update(dailyKey).digest();
  return ACTIONS[digest[0]%ACTIONS.length]+" "+COLORS[digest[1]%COLORS.length]+" "+ANIMALS[digest[2]%ANIMALS.length];
 };
 const isPrivatePost = p => (p?.category||"free")==="report";
